@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import tensorflow as tf
 import os.path as osp
+import time
 
 import models
 import dataset
@@ -34,7 +35,7 @@ def load_model(name):
     return NetClass({'data': data_node})
 
 
-def validate(net, model_path, image_producer, top_k=5):
+def validate(net, model_path, image_producer, model_name, top_k=5):
     '''Compute the top_k classification accuracy for the given network and images.'''
     # Get the data specifications for given network
     spec = models.get_data_spec(model_instance=net)
@@ -52,24 +53,32 @@ def validate(net, model_path, image_producer, top_k=5):
     correct = 0
     # The total number of images
     total = len(image_producer)
-
+    merged = tf.merge_all_summaries()
     with tf.Session() as sesh:
+        writer = tf.train.SummaryWriter('/tmp/' + model_name, graph = sesh.graph)
         coordinator = tf.train.Coordinator()
         # Load the converted parameters
         net.load(data_path=model_path, session=sesh)
         # Start the image processing workers
         threads = image_producer.start(session=sesh, coordinator=coordinator)
         # Iterate over and classify mini-batches
+        batch_num = 0
         for (labels, images) in image_producer.batches(sesh):
-            correct += np.sum(sesh.run(top_k_op,
-                                       feed_dict={input_node: images,
-                                                  label_node: labels}))
+            start = time.time()
+            summary, top_k_res = sesh.run([merged, top_k_op],
+                                          feed_dict={input_node: images,
+                                                     label_node: labels})
+            correct += np.sum(top_k_res)
+            print('Inference time for batch_size=%d is %.2f ms.' % (len(labels), 1000 * (time.time() - start)))
             count += len(labels)
             cur_accuracy = float(correct) * 100 / count
             print('{:>6}/{:<6} {:>6.2f}%'.format(count, total, cur_accuracy))
+            writer.add_summary(summary, batch_num)
+            batch_num = batch_num + 1
         # Stop the worker threads
         coordinator.request_stop()
         coordinator.join(threads, stop_grace_period_secs=2)
+        writer.close()
     print('Top {} Accuracy: {}'.format(top_k, float(correct) / total))
 
 
@@ -95,7 +104,7 @@ def main():
                                               data_spec=data_spec)
 
     # Evaluate its performance on the ILSVRC12 validation set
-    validate(net, args.model_path, image_producer)
+    validate(net, args.model_path, image_producer, args.model)
 
 
 if __name__ == '__main__':

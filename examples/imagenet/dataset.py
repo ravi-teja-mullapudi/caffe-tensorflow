@@ -20,7 +20,7 @@ def process_image(img, scale, isotropic, crop, mean):
         new_shape = tf.to_int32((scale / min_length) * img_shape)
     else:
         new_shape = tf.pack([scale, scale])
-    img = tf.image.resize_images(img, new_shape[0], new_shape[1])
+    img = tf.image.resize_images(img, new_shape)
     # Center crop
     # Use the slice workaround until crop_to_bounding_box supports deferred tensor shapes
     # See: https://github.com/tensorflow/tensorflow/issues/521
@@ -148,9 +148,9 @@ class ImageProducer(object):
 
         def is_jpeg(path):
             extension = osp.splitext(path)[-1].lower()
-            if extension in ('.jpg', '.jpeg'):
+            if extension in ('.jpg', '.jpeg', '.JPEG'):
                 return True
-            if extension != '.png':
+            if extension in ('.png', '.PNG'):
                 raise ValueError('Unsupported image format: {}'.format(extension))
             return False
 
