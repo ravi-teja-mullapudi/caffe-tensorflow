@@ -113,7 +113,8 @@ class Network(object):
              relu=True,
              padding=DEFAULT_PADDING,
              group=1,
-             biased=True):
+             biased=True,
+             summary=True):
         # Verify that the padding is acceptable
         self.validate_padding(padding)
         # Get the number of channels in the input
@@ -142,6 +143,34 @@ class Network(object):
             if relu:
                 # ReLU non-linearity
                 output = tf.nn.relu(output, name=scope.name)
+            if summary:
+                #one_actv = tf.slice(output, [0, 0, 0, 0], [-1, -1, -1, 1])
+                #print(one_actv.get_shape())
+                #tf.image_summary(name + 'filter_0_actv', one_actv, max_images=4)
+                zeros_in = tf.less(tf.abs(input), 0.0001)
+                scalar_in = tf.reduce_sum(tf.cast(zeros_in, tf.int32))
+                sparsity_in = tf.div(tf.cast(scalar_in, tf.float32),
+                                     tf.cast(tf.size(input), tf.float32))
+                #sparsity_in = tf.Print(sparsity_in, [sparsity_in], message = name + ' input_sparsity:')
+                tf.scalar_summary(name + '_input_sparsity', sparsity_in)
+
+                zeros_out = tf.less(tf.abs(output), 0.0001)
+                scalar_out = tf.reduce_sum(tf.cast(zeros_out, tf.int32))
+                sparsity_out = tf.div(tf.cast(scalar_out, tf.float32),
+                                      tf.cast(tf.size(output), tf.float32))
+                #sparsity_out = tf.Print(sparsity_out, [sparsity_out], message = name + ' output_sparsity:')
+                tf.scalar_summary(name + '_output_sparsity', sparsity_out)
+
+                min_in = tf.reduce_min(input)
+                max_in = tf.reduce_max(input)
+                tf.scalar_summary([name + '_min_input_range',
+                                   name + '_max_input_range'], tf.pack([min_in, max_in]))
+
+                min_out = tf.reduce_min(output)
+                max_out= tf.reduce_max(output)
+                tf.scalar_summary([name + '_min_output_range',
+                                   name + '_max_output_range'], tf.pack([min_out, max_out]))
+                #tf.histogram_summary(name, output)
             return output
 
     @layer
@@ -212,7 +241,7 @@ class Network(object):
                 input = tf.squeeze(input, squeeze_dims=[1, 2])
             else:
                 raise ValueError('Rank 2 tensor input expected for softmax!')
-        return tf.nn.softmax(input, name)
+        return tf.nn.softmax(input, name = name)
 
     @layer
     def batch_normalization(self, input, name, scale_offset=True, relu=False):
