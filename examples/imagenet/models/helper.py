@@ -61,12 +61,12 @@ MODELS = (AlexNet, CaffeNet, GoogleNet, NiN, ResNet50, ResNet101, ResNet152, VGG
 MODEL_DATA_SPECS = {
     AlexNet: alexnet_spec(),
     CaffeNet: alexnet_spec(),
-    GoogleNet: std_spec(batch_size=200, isotropic=False),
-    ResNet50: std_spec(batch_size=25),
+    GoogleNet: std_spec(batch_size=1, isotropic=False),
+    ResNet50: std_spec(batch_size=1),
     ResNet101: std_spec(batch_size=25),
     ResNet152: std_spec(batch_size=25),
     NiN: std_spec(batch_size=500),
-    VGG16: std_spec(batch_size=25)
+    VGG16: std_spec(batch_size=1)
 }
 
 

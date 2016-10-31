@@ -45,17 +45,50 @@ def validate(net, model_path, image_producer, model_name, top_k=5):
     label_node = tf.placeholder(tf.int32)
     # Get the output of the network (class probabilities)
     probs = net.get_output()
+    compute_ops = {}
+    threshold = 50
+    # Sparisty in conv layer inputs
+    total_ops = 0
+    for lname, op_count in net.layer_op_counts.iteritems():
+        layer_inputs = net.layer_inputs[lname]
+        assert(len(layer_inputs) == 1)
+        for lin in layer_inputs:
+            zero_actv = tf.less(tf.abs(lin), threshold)
+            num_zeroes = tf.reduce_sum(tf.cast(zero_actv, tf.int32))
+            sparsity = tf.div(tf.cast(num_zeroes, tf.float32),
+                              tf.cast(tf.size(lin), tf.float32))
+
+            compute_ops[lname] = sparsity
+            compute_ops[lname + '_min'] = tf.reduce_min(lin)
+            compute_ops[lname + '_max'] = tf.reduce_max(lin)
+
+        total_ops = total_ops + op_count
+
+    """
+    for lname in sorted(net.layer_op_counts, key=net.layer_op_counts.get, reverse=True):
+        op_count = net.layer_op_counts[lname]
+        print("%s %.3f" %(lname, float(op_count)/total_ops))
+    """
     # Create a top_k accuracy node
     top_k_op = tf.nn.in_top_k(probs, label_node, top_k)
+    compute_ops['top_k'] = top_k_op
     # The number of images processed
     count = 0
     # The number of correctly classified images
     correct = 0
     # The total number of images
     total = len(image_producer)
-    merged = tf.merge_all_summaries()
+    #merged = tf.merge_all_summaries()
+    sparsity = {}
+    input_min = {}
+    input_max = {}
+    for lname, ops in net.layer_op_counts.iteritems():
+        sparsity[lname] = 0
+        input_max[lname] = float('-inf')
+        input_min[lname] = float('inf')
+
     with tf.Session() as sesh:
-        writer = tf.train.SummaryWriter('/tmp/' + model_name, graph = sesh.graph)
+        #writer = tf.train.SummaryWriter('/tmp/' + model_name, graph = sesh.graph)
         coordinator = tf.train.Coordinator()
         # Load the converted parameters
         net.load(data_path=model_path, session=sesh)
@@ -65,23 +98,35 @@ def validate(net, model_path, image_producer, model_name, top_k=5):
         batch_num = 0
         for (labels, images) in image_producer.batches(sesh):
             start = time.time()
-            summary, top_k_res = sesh.run([merged, top_k_op],
+            """
+            summary, top_k_res = sesh.run([top_k_op],
                                           feed_dict={input_node: images,
                                                      label_node: labels})
-            correct += np.sum(top_k_res)
+            """
+            out_dict = sesh.run(compute_ops, feed_dict={input_node: images,
+                                                        label_node: labels})
+
+            for lname, ops in net.layer_op_counts.iteritems():
+                sparsity[lname] = sparsity[lname] + out_dict[lname]
+                input_max[lname] = max(input_max[lname], out_dict[lname + '_max'])
+                input_min[lname] = min(input_min[lname], out_dict[lname + '_min'])
+
+            correct += np.sum(out_dict['top_k'])
             print('Inference time for batch_size=%d is %.2f ms.' % (len(labels), 1000 * (time.time() - start)))
             count += len(labels)
             cur_accuracy = float(correct) * 100 / count
             print('{:>6}/{:<6} {:>6.2f}%'.format(count, total, cur_accuracy))
-            writer.add_summary(summary, batch_num)
+            #writer.add_summary(summary, batch_num)
             batch_num = batch_num + 1
         # Stop the worker threads
         coordinator.request_stop()
         coordinator.join(threads, stop_grace_period_secs=2)
-        writer.close()
+        #writer.close()
     print('Top {} Accuracy: {}'.format(top_k, float(correct) / total))
 
-
+    for lname in sorted(net.layer_op_counts, key=net.layer_op_counts.get, reverse=True):
+        print lname, float(net.layer_op_counts[lname])/total_ops, \
+              sparsity[lname]/total, input_min[lname], input_max[lname]
 
 def main():
     # Parse arguments

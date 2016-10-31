@@ -11,16 +11,20 @@ def layer(op):
         # Automatically set a name if not provided.
         name = kwargs.setdefault('name', self.get_unique_name(op.__name__))
         # Figure out the layer inputs.
+        input_list = []
         if len(self.terminals) == 0:
             raise RuntimeError('No input variables found for layer %s.' % name)
         elif len(self.terminals) == 1:
             layer_input = self.terminals[0]
+            input_list = [self.terminals[0]]
         else:
             layer_input = list(self.terminals)
+            input_list = layer_input
         # Perform the operation and get the output.
         layer_output = op(self, layer_input, *args, **kwargs)
         # Add to layer LUT.
         self.layers[name] = layer_output
+        self.layer_inputs[name] = input_list
         # This output is now the input for the next layer.
         self.feed(layer_output)
         # Return self for chained calls.
@@ -38,6 +42,9 @@ class Network(object):
         self.terminals = []
         # Mapping from layer names to layers
         self.layers = dict(inputs)
+        # Mapping from layer names to layer inputs
+        self.layer_inputs = {}
+        self.layer_op_counts = {}
         # If true, the resulting variables are set as trainable
         self.trainable = trainable
         # Switch variable for dropout
@@ -114,7 +121,8 @@ class Network(object):
              padding=DEFAULT_PADDING,
              group=1,
              biased=True,
-             summary=True):
+             summary=False,
+             input_threshold=True):
         # Verify that the padding is acceptable
         self.validate_padding(padding)
         # Get the number of channels in the input
@@ -126,16 +134,28 @@ class Network(object):
         convolve = lambda i, k: tf.nn.conv2d(i, k, [1, s_h, s_w, 1], padding=padding)
         with tf.variable_scope(name) as scope:
             kernel = self.make_var('weights', shape=[k_h, k_w, c_i / group, c_o])
+            threshold = 25
+            input_thresh = input
+
+            if input_threshold:
+                non_zeros_in = tf.greater_equal(tf.abs(input), threshold)
+                input_thresh = tf.mul(tf.cast(non_zeros_in, tf.float32), input)
+
             if group == 1:
                 # This is the common-case. Convolve the input without any further complications.
-                output = convolve(input, kernel)
+                output = convolve(input_thresh, kernel)
             else:
                 # Split the input into groups and then convolve each of them independently
-                input_groups = tf.split(3, group, input)
+                input_groups = tf.split(3, group, input_thresh)
                 kernel_groups = tf.split(3, group, kernel)
                 output_groups = [convolve(i, k) for i, k in zip(input_groups, kernel_groups)]
                 # Concatenate the groups
                 output = tf.concat(3, output_groups)
+            in_h = input_thresh.get_shape()[-2]
+            in_w = input_thresh.get_shape()[-3]
+
+            self.layer_op_counts[name] = in_h.value/s_h * in_w.value/s_w *\
+                                         k_h * k_w * c_i.value * c_o
             # Add the biases
             if biased:
                 biases = self.make_var('biases', [c_o])
@@ -147,10 +167,10 @@ class Network(object):
                 #one_actv = tf.slice(output, [0, 0, 0, 0], [-1, -1, -1, 1])
                 #print(one_actv.get_shape())
                 #tf.image_summary(name + 'filter_0_actv', one_actv, max_images=4)
-                zeros_in = tf.less(tf.abs(input), 0.0001)
+                zeros_in = tf.less(tf.abs(input_thresh), 0.0001)
                 scalar_in = tf.reduce_sum(tf.cast(zeros_in, tf.int32))
                 sparsity_in = tf.div(tf.cast(scalar_in, tf.float32),
-                                     tf.cast(tf.size(input), tf.float32))
+                                     tf.cast(tf.size(input_thresh), tf.float32))
                 #sparsity_in = tf.Print(sparsity_in, [sparsity_in], message = name + ' input_sparsity:')
                 tf.scalar_summary(name + '_input_sparsity', sparsity_in)
 
@@ -161,8 +181,8 @@ class Network(object):
                 #sparsity_out = tf.Print(sparsity_out, [sparsity_out], message = name + ' output_sparsity:')
                 tf.scalar_summary(name + '_output_sparsity', sparsity_out)
 
-                min_in = tf.reduce_min(input)
-                max_in = tf.reduce_max(input)
+                min_in = tf.reduce_min(input_thresh)
+                max_in = tf.reduce_max(input_thresh)
                 tf.scalar_summary([name + '_min_input_range',
                                    name + '_max_input_range'], tf.pack([min_in, max_in]))
 
